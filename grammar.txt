@@ -1,5 +1,12 @@
-E -> T E'
-E' -> + T E' | ε
-T -> F T'
-T' -> * F T' | ε
-F -> id | ( E )
+E -> T E_prime
+E_prime -> PLUS T E_prime | eps
+T -> F T_prime
+T_prime -> STAR F T_prime | eps
+F -> LEFT_PAR E RIGHT_PAR | IDENTIFIER | LITERAL
+
+IDENTIFIER -> [a-zA-Z_][a-zA-Z0-9_]*
+LITERAL -> \d+(\.\d+)?
+PLUS -> \+
+STAR -> \*
+LEFT_PAR -> \(
+RIGHT_PAR -> \)
