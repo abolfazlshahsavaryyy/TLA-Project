@@ -130,6 +130,57 @@ class Grammar:
                 print(f"{non_term} , {terminal} => {non_term} -> {production}")
 
 
+class DPDA:
+    def __init__(self, grammar: Grammar):
+        self.grammar = grammar
+        self.parse_table = grammar.parse_table
+        self.stack = []
+
+    def parse(self, tokens: List[str]) -> bool:
+        self.stack = ['$']
+        start_symbol = next(iter(self.grammar.productions))
+        self.stack.append(start_symbol)
+
+        # اضافه کردن علامت پایان به توکن‌ها
+        tokens.append('$')
+        index = 0
+
+        print(f"{'STACK':<30} {'INPUT':<30} ACTION")
+        while self.stack:
+            top = self.stack[-1]
+            current_token = tokens[index] if index < len(tokens) else '$'
+            print(f"{' '.join(self.stack):<30} {' '.join(tokens[index:]):<30}", end='')
+
+            if top == current_token == '$':
+                print("✓ ACCEPT")
+                return True
+
+            if top == current_token:
+                self.stack.pop()
+                index += 1
+                print(f"Match terminal '{top}'")
+            elif top in self.grammar.terminals:
+                print(f"✗ Error: expected '{top}', got '{current_token}'")
+                return False
+            elif top in self.grammar.non_terminals:
+                rule = self.parse_table.get(top, {}).get(current_token)
+                if rule:
+                    self.stack.pop()
+                    rhs = rule.split()
+                    if rhs != ['eps']:
+                        self.stack.extend(reversed(rhs))
+                    print(f"Apply rule: {top} → {rule}")
+                else:
+                    print(f"✗ Error: no rule for {top} with lookahead '{current_token}'")
+                    return False
+            else:
+                print(f"✗ Error: unknown symbol '{top}'")
+                return False
+
+        print("✗ Error: input not fully consumed")
+        return False
+
+
 # ====================== تست در main ======================
 
 if __name__ == "__main__":
@@ -137,3 +188,9 @@ if __name__ == "__main__":
     grammar.load_from_file("grammar.txt")
     grammar.build_parse_table()
     grammar.display_parse_table()
+    print("\nآزمایش DPDA با ورودی:")
+    input_tokens = ['id', '+', 'id', '*', 'id']  # می‌تونی این رو تغییر بدی
+    dpda = DPDA(grammar)
+    accepted = dpda.parse(input_tokens)
+    print("\nنتیجه:", "✓ رشته پذیرفته شد" if accepted else "✗ رشته رد شد")
+
