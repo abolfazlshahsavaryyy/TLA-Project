@@ -4,15 +4,17 @@ from graphviz import Digraph
 
 
 class ParseTreeNode:
-    def __init__(self, symbol: str):
+    def __init__(self, symbol: str, value: Optional[str] = None):
         self.symbol = symbol
+        self.value = value
         self.children: List["ParseTreeNode"] = []
 
     def add_child(self, child: "ParseTreeNode"):
         self.children.append(child)
 
     def print_tree(self, indent: str = ""):
-        print(indent + self.symbol)
+        to_print = self.value if self.value is not None else self.symbol
+        print(indent + to_print)
         for child in self.children:
             child.print_tree(indent + "  ")
 
@@ -21,8 +23,13 @@ class ParseTreeNode:
 
         def _rename(node: "ParseTreeNode"):
             nonlocal replaced
-            if node.symbol == old and (count is None or replaced < count):
-                node.symbol = new
+            if (node.symbol == old or node.value == old) and (
+                count is None or replaced < count
+            ):
+                if node.symbol == old:
+                    node.symbol = new
+                if node.value == old:
+                    node.value = new
                 replaced += 1
             for child in node.children:
                 _rename(child)
@@ -36,7 +43,8 @@ class ParseTreeNode:
         def add_nodes_edges(node: "ParseTreeNode", parent_id: Optional[str] = None):
             node_id = f"n{node_id_counter[0]}"
             node_id_counter[0] += 1
-            dot.node(node_id, node.symbol)
+            label = node.value if node.value is not None else node.symbol
+            dot.node(node_id, label)
             if parent_id:
                 dot.edge(parent_id, node_id)
             for child in node.children:
@@ -52,70 +60,42 @@ class Grammar:
         self.non_terminals: Set[str] = set()
         self.terminals: Set[str] = set()
         self.productions: Dict[str, List[str]] = {}
-        self.lexical_rules: Dict[str, str] = {}  # Terminal -> regex pattern (string)
+        self.lexical_rules: Dict[str, str] = {}
         self.first_sets: Dict[str, Set[str]] = {}
         self.follow_sets: Dict[str, Set[str]] = {}
         self.parse_table: Dict[str, Dict[str, str]] = {}
 
     def load_from_file(self, filename: str):
-        mode = None
         with open(filename, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
-                    # Skip comments and empty lines
                     continue
-
-                # Detect mode by line pattern
                 if line.startswith("START"):
-                    # e.g. START = E
                     self.start_symbol = line.split("=")[1].strip()
-                    mode = None
                     continue
-
                 if line.startswith("NON_TERMINALS"):
-                    # e.g. NON_TERMINALS = E , E_prime , T , T_prime , F
                     nts = line.split("=")[1]
                     self.non_terminals = {nt.strip() for nt in nts.split(",")}
-                    mode = None
                     continue
-
                 if line.startswith("TERMINALS"):
-                    # e.g. TERMINALS = IDENTIFIER , LITERAL , PLUS , STAR , LEFT_PAR , RIGHT_PAR
                     ts = line.split("=")[1]
                     self.terminals = {t.strip() for t in ts.split(",")}
-                    mode = None
                     continue
-
-                # Now productions or lexical definitions
                 if "->" in line:
-                    # Production or lexical rule
-                    # Distinguish lexical rule by regex delimiters "/" or "\"
                     lhs, rhs = line.split("->", 1)
                     lhs = lhs.strip()
                     rhs = rhs.strip()
-
-                    # Check if rhs looks like a regex (starts and ends with / or \)
                     if (rhs.startswith("/") and rhs.endswith("/")) or (
                         rhs.startswith("\\") and rhs.endswith("\\")
                     ):
-                        # Lexical rule
-                        # Remove surrounding / or \ and trim spaces
                         regex_pattern = rhs[1:-1].strip()
                         self.lexical_rules[lhs] = regex_pattern
                     else:
-                        # Production rule
-                        mode = "productions"
                         if lhs not in self.productions:
                             self.productions[lhs] = []
-                        # Split alternatives on "|"
                         alternatives = [alt.strip() for alt in rhs.split("|")]
                         self.productions[lhs].extend(alternatives)
-                else:
-                    # If no arrow, just ignore or end
-                    pass
-
-        # Some terminals might be defined by lexical rules but not listed explicitly
         self.terminals.update(self.lexical_rules.keys())
 
     def compute_first_sets(self):
@@ -143,7 +123,6 @@ class Grammar:
                                 continue
                             break
                     else:
-                        # If all symbols had eps
                         if "eps" not in self.first_sets[nt]:
                             self.first_sets[nt].add("eps")
                             changed = True
@@ -210,24 +189,20 @@ class Grammar:
 
 class Lexer:
     def __init__(self, lexical_rules: Dict[str, str]):
-        # lexical_rules: terminal -> regex pattern (string)
-        # Compile regex patterns into one big regex with named groups
         self.terminals = list(lexical_rules.keys())
         parts = []
         for term in self.terminals:
             pattern = lexical_rules[term]
-            # Remove whitespace in pattern for safety in case user used spaces in regex like [a -z]
             pattern = pattern.replace(" ", "")
             parts.append(f"(?P<{term}>{pattern})")
         self.master_pattern = re.compile("|".join(parts))
 
-    def tokenize(self, text: str) -> List[str]:
+    def tokenize(self, text: str) -> List[Tuple[str, str]]:
         tokens = []
         pos = 0
         while pos < len(text):
             match = self.master_pattern.match(text, pos)
             if not match:
-                # Skip whitespace or unknown characters gracefully
                 if text[pos].isspace():
                     pos += 1
                     continue
@@ -235,7 +210,8 @@ class Lexer:
                     f"Unexpected character at position {pos}: {text[pos]!r}"
                 )
             term = match.lastgroup
-            tokens.append(term)
+            value = match.group()
+            tokens.append((term, value))
             pos = match.end()
         return tokens
 
@@ -245,8 +221,10 @@ class DPDA:
         self.grammar = grammar
         self.parse_table = grammar.parse_table
 
-    def build_parse_tree(self, tokens: List[str]) -> Optional[ParseTreeNode]:
-        tokens = tokens + ["$"]
+    def build_parse_tree(
+        self, tokens: List[Tuple[str, str]]
+    ) -> Optional[ParseTreeNode]:
+        tokens = tokens + [("$", "$")]
         index = 0
         root = ParseTreeNode(self.grammar.start_symbol)
         stack: List[Tuple[str, Optional[ParseTreeNode]]] = [
@@ -256,7 +234,7 @@ class DPDA:
 
         while stack:
             top_symbol, top_node = stack.pop()
-            current_token = tokens[index]
+            current_token, current_value = tokens[index]
 
             if top_symbol == current_token == "$":
                 return root
@@ -264,11 +242,10 @@ class DPDA:
             if top_symbol == current_token:
                 index += 1
                 if top_node:
-                    top_node.add_child(ParseTreeNode(current_token))
+                    top_node.add_child(ParseTreeNode(top_symbol, current_value))
                 continue
 
             if top_symbol in self.grammar.terminals:
-                # Terminal mismatch
                 print(
                     f"Error: expected terminal {top_symbol} but found {current_token}"
                 )
@@ -282,11 +259,14 @@ class DPDA:
                     )
                     return None
                 symbols = rule.split()
-                children_nodes = [ParseTreeNode(sym) for sym in symbols if sym != "eps"]
+                children_nodes = [
+                    ParseTreeNode(sym) if sym == "eps" else ParseTreeNode(sym)
+                    for sym in symbols
+                    if sym != "eps"
+                ]
                 if top_node:
                     for child in children_nodes:
                         top_node.add_child(child)
-                # Push in reverse order
                 for sym, child_node in reversed(list(zip(symbols, children_nodes))):
                     if sym != "eps":
                         stack.append((sym, child_node))
@@ -302,8 +282,8 @@ class DPDA:
 
 if __name__ == "__main__":
     grammar = Grammar()
-    grammar.load_from_file("grammar2.txt")
-
+    grammar_file = input("Enter grammar file name: ")
+    grammar.load_from_file(grammar_file)
     print("Start symbol:", grammar.start_symbol)
     print("Non-terminals:", grammar.non_terminals)
     print("Terminals:", grammar.terminals)
@@ -314,31 +294,41 @@ if __name__ == "__main__":
     print("Lexical Rules:")
     for t, r in grammar.lexical_rules.items():
         print(f"  {t} -> {r}")
-
     grammar.build_parse_table()
     grammar.display_parse_table()
-
     lexer = Lexer(grammar.lexical_rules)
-
-    input_string = input("please inpute your language: ")
+    input_string = input("Please input your language: ")
     print("\nInput string:", input_string)
-
     try:
         tokens = lexer.tokenize(input_string)
-        print("Tokens:", tokens)
+        print("Tokens:", [val for _, val in tokens])
     except RuntimeError as e:
         print("Lexer error:", e)
         tokens = []
-
     if tokens:
         dpda = DPDA(grammar)
         parse_tree = dpda.build_parse_tree(tokens)
         if parse_tree:
             print("\nParse tree:")
             parse_tree.print_tree()
-
             print("\nGenerating Graphviz parse tree...")
             dot = parse_tree.to_graphviz()
-            dot.render("parse_tree", view=True, format="pdf")
+            output_path = "parse_tree"
+            dot.render(output_path, format="pdf")
+            print(f"Parse tree graph generated: {output_path}.pdf")
+            flag = input("Do you want to rename a symbol?(yes/no)")
+            if flag == "yes":
+                old_sym = input("Enter symbol to rename: ")
+                new_sym = input("Enter new symbol: ")
+                count_str = input("How many replacements? (Leave empty for all): ")
+                count = int(count_str) if count_str.strip() else None
+                parse_tree.rename_symbol(old_sym, new_sym, count)
+                print("\nTree after renaming:")
+                parse_tree.print_tree()
+                print("\nGenerating Graphviz parse tree...")
+                dot = parse_tree.to_graphviz()
+                output_path = "parse_tree_rename"
+                dot.render(output_path, format="pdf")
+                print(f"Parse tree graph generated: {output_path}.pdf")
         else:
-            print("\nParsing failed.")
+            print("Parsing failed. No parse tree generated.")
