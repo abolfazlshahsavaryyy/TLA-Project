@@ -1,5 +1,0 @@
-E -> T E_prime
-E_prime -> + T E_prime | eps
-T -> F T_prime
-T_prime -> * F T_prime | eps
-F -> id | ( E )
